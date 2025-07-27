@@ -19,6 +19,8 @@ Relax and Enjoy
 
  - [ ] complete README
  - [ ] Add MIT License
- - [ ] Add /ping api endpoint
- - [ ] Create /stream endpoint and serve static page
- - [ ] Create /watch endpoint and serve static page
+ - [x] Add /ping api endpoint
+ - [x] Add `Dockerfile`
+ - [x] Add `docker-compose.yml` file
+ - [ ] Create `/stream` endpoint and serve static page
+ - [ ] Create `/watch` endpoint and serve static page
