@@ -22,5 +22,5 @@ Relax and Enjoy
  - [x] Add /ping api endpoint
  - [x] Add `Dockerfile`
  - [x] Add `docker-compose.yml` file
- - [ ] Create `/stream` endpoint and serve static page
- - [ ] Create `/watch` endpoint and serve static page
+ - [x] Create `/stream` endpoint and serve static page
+ - [x] Create `/watch` endpoint and serve static page
