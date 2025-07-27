@@ -18,7 +18,7 @@ Relax and Enjoy
 ### TODO
 
  - [ ] complete README
- - [ ] Add MIT License
+ - [x] Add MIT License
  - [x] Add /ping api endpoint
  - [x] Add `Dockerfile`
  - [x] Add `docker-compose.yml` file
