@@ -1,16 +1,473 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
-  <title>YT-Live | Stream</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YT-Live | Watch</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f0f0f0;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      color: #333;
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .status {
+      text-align: center;
+      margin: 20px 0;
+      padding: 15px;
+      border-radius: 5px;
+      font-weight: bold;
+      font-size: 16px;
+    }
+
+    .status.connected {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .status.connecting {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    .status.waiting {
+      background: #d1ecf1;
+      color: #0c5460;
+    }
+
+    .streams-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 20px;
+      margin-top: 30px;
+    }
+
+    .stream-box {
+      background: #f8f9fa;
+      border-radius: 10px;
+      padding: 15px;
+      text-align: center;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    .stream-box h3 {
+      margin: 0 0 15px 0;
+      color: #333;
+    }
+
+    .stream-video {
+      width: 100%;
+      max-width: 400px;
+      height: auto;
+      border-radius: 8px;
+      background: #000;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    }
+
+    .stream-status {
+      margin-top: 10px;
+      padding: 5px 10px;
+      border-radius: 15px;
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    .stream-status.connected {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .stream-status.connecting {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .stream-status.disconnected {
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    .controls {
+      text-align: center;
+      margin: 20px 0;
+    }
+
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      margin: 0 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    button:hover {
+      background: #0056b3;
+    }
+
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .info {
+      text-align: center;
+      margin-top: 20px;
+      color: #666;
+      font-style: italic;
+    }
+  </style>
 </head>
 
 <body>
-  <div id="psycho">
-    <span id="psycho-text"></span>
+  <div class="container">
+    <h1>YT-Live Viewer</h1>
+
+    <div class="status" id="status">Click "Connect" to start watching</div>
+
+    <div class="controls">
+      <button id="connectBtn" onclick="connectToStreams()">Connect</button>
+      <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+    </div>
+
+    <div class="streams-container" id="streamsContainer">
+      <!-- Stream boxes will be added dynamically -->
+    </div>
+
+    <div class="info">
+      <p>This viewer can watch both participant streams simultaneously.</p>
+      <p>To start streaming, open: <a href="/stream" target="_blank">/stream</a></p>
+    </div>
   </div>
-  <script type="text/javascript">
-    document.getElementById('psycho-text').innerText = "No libraries, lets go full mode psycho!!!";
+
+  <script>
+    let ws = null;
+    let clientId = null;
+    let peerConnections = new Map(); // streamerId -> RTCPeerConnection
+    let streamBoxes = new Map(); // streamerId -> DOM elements
+
+    const status = document.getElementById('status');
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const streamsContainer = document.getElementById('streamsContainer');
+
+    // WebRTC configuration
+    const pcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    };
+
+    function updateStatus(message, type = 'connecting') {
+      status.textContent = message;
+      status.className = `status ${type}`;
+    }
+
+    function connectToStreams() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        updateStatus('Connected to server. Looking for streamers...', 'connected');
+
+        // Join as watcher
+        ws.send(JSON.stringify({
+          type: 'join',
+          clientType: 'watcher'
+        }));
+
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+      };
+
+      ws.onmessage = async (event) => {
+        const data = JSON.parse(event.data);
+        console.log('Received:', data.type);
+
+        switch (data.type) {
+          case 'joined':
+            clientId = data.clientId;
+            console.log('Joined with ID:', clientId);
+            break;
+
+          case 'streamers-list':
+            handleStreamersList(data.streamers);
+            break;
+
+          case 'streamer-joined':
+            handleStreamerJoined(data.clientId);
+            break;
+
+          case 'offer':
+            await handleOffer(data.senderId, data.offer);
+            break;
+
+          case 'answer':
+            await handleAnswer(data.senderId, data.answer);
+            break;
+
+          case 'ice-candidate':
+            await handleIceCandidate(data.senderId, data.candidate);
+            break;
+
+          case 'user-disconnected':
+            handleUserDisconnected(data.clientId);
+            break;
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        updateStatus('Disconnected from server', 'error');
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        updateStatus('Connection error', 'error');
+      };
+    }
+
+    function handleStreamersList(streamers) {
+      console.log('Current streamers:', streamers);
+
+      if (streamers.length === 0) {
+        updateStatus('No streamers currently online. Waiting...', 'waiting');
+      } else {
+        updateStatus(`Found ${streamers.length} streamer(s). Waiting for connections...`, 'connecting');
+        // Just create UI boxes for existing streamers, they will send offers to us
+        streamers.forEach(streamerId => {
+          createStreamBox(streamerId);
+        });
+      }
+    }
+
+    function handleStreamerJoined(streamerId) {
+      console.log('New streamer joined:', streamerId);
+      createStreamBox(streamerId);
+      updateStatus('New streamer joined! Waiting for connection...', 'connecting');
+    }
+
+    function createPeerConnectionForStreamer(streamerId) {
+      if (peerConnections.has(streamerId)) {
+        return peerConnections.get(streamerId);
+      }
+
+      console.log('Creating peer connection for streamer:', streamerId);
+
+      // Create peer connection
+      const pc = new RTCPeerConnection(pcConfig);
+      peerConnections.set(streamerId, pc);
+
+      // Handle remote stream
+      pc.ontrack = (event) => {
+        console.log('Received track from', streamerId);
+        const [remoteStream] = event.streams;
+        const video = streamBoxes.get(streamerId).video;
+        video.srcObject = remoteStream;
+        updateStreamStatus(streamerId, 'Connected', 'connected');
+      };
+
+      // Handle ICE candidates
+      pc.onicecandidate = (event) => {
+        if (event.candidate && ws) {
+          ws.send(JSON.stringify({
+            type: 'ice-candidate',
+            candidate: event.candidate,
+            targetId: streamerId
+          }));
+        }
+      };
+
+      // Handle connection state changes
+      pc.onconnectionstatechange = () => {
+        console.log(`Connection state with ${streamerId}:`, pc.connectionState);
+        const streamBox = streamBoxes.get(streamerId);
+        if (!streamBox) return;
+
+        switch (pc.connectionState) {
+          case 'connected':
+            updateStreamStatus(streamerId, 'Connected', 'connected');
+            break;
+          case 'connecting':
+            updateStreamStatus(streamerId, 'Connecting...', 'connecting');
+            break;
+          case 'disconnected':
+          case 'failed':
+            updateStreamStatus(streamerId, 'Disconnected', 'disconnected');
+            break;
+        }
+      };
+
+      return pc;
+    }
+
+    async function handleOffer(senderId, offer) {
+      console.log('Received offer from streamer:', senderId);
+
+      // Create stream box if it doesn't exist
+      if (!streamBoxes.has(senderId)) {
+        createStreamBox(senderId);
+      }
+
+      // Create or get peer connection
+      const pc = createPeerConnectionForStreamer(senderId);
+
+      try {
+        updateStreamStatus(senderId, 'Responding to offer...', 'connecting');
+        await pc.setRemoteDescription(offer);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({
+          type: 'answer',
+          answer: answer,
+          targetId: senderId
+        }));
+
+        updateStreamStatus(senderId, 'Connecting...', 'connecting');
+      } catch (error) {
+        console.error('Error handling offer:', error);
+        updateStreamStatus(senderId, 'Connection failed', 'disconnected');
+      }
+    }
+
+    async function handleAnswer(senderId, answer) {
+      const pc = peerConnections.get(senderId);
+      if (!pc) return;
+
+      try {
+        await pc.setRemoteDescription(answer);
+      } catch (error) {
+        console.error('Error handling answer:', error);
+      }
+    }
+
+    async function handleIceCandidate(senderId, candidate) {
+      const pc = peerConnections.get(senderId);
+      if (!pc) return;
+
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch (error) {
+        console.error('Error handling ICE candidate:', error);
+      }
+    }
+
+    function handleUserDisconnected(clientId) {
+      console.log('User disconnected:', clientId);
+
+      // Close peer connection
+      const pc = peerConnections.get(clientId);
+      if (pc) {
+        pc.close();
+        peerConnections.delete(clientId);
+      }
+
+      // Remove stream box
+      const streamBox = streamBoxes.get(clientId);
+      if (streamBox) {
+        streamBox.container.remove();
+        streamBoxes.delete(clientId);
+      }
+
+      // Update status if no more streamers
+      if (peerConnections.size === 0) {
+        updateStatus('All streamers disconnected. Waiting for new streamers...', 'waiting');
+      }
+    }
+
+    function createStreamBox(streamerId) {
+      const container = document.createElement('div');
+      container.className = 'stream-box';
+
+      const title = document.createElement('h3');
+      title.textContent = `Streamer ${streamerId.substring(0, 8)}`;
+
+      const video = document.createElement('video');
+      video.className = 'stream-video';
+      video.autoplay = true;
+      video.playsInline = true;
+
+      const status = document.createElement('div');
+      status.className = 'stream-status connecting';
+      status.textContent = 'Connecting...';
+
+      container.appendChild(title);
+      container.appendChild(video);
+      container.appendChild(status);
+
+      streamsContainer.appendChild(container);
+
+      streamBoxes.set(streamerId, {
+        container,
+        video,
+        status
+      });
+    }
+
+    function updateStreamStatus(streamerId, message, type) {
+      const streamBox = streamBoxes.get(streamerId);
+      if (streamBox) {
+        streamBox.status.textContent = message;
+        streamBox.status.className = `stream-status ${type}`;
+      }
+    }
+
+    function disconnect() {
+      // Close all peer connections
+      peerConnections.forEach((pc, streamerId) => {
+        pc.close();
+      });
+      peerConnections.clear();
+
+      // Remove all stream boxes
+      streamBoxes.forEach((streamBox) => {
+        streamBox.container.remove();
+      });
+      streamBoxes.clear();
+
+      // Close WebSocket
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      updateStatus('Disconnected', 'error');
+    }
+
+    // Clean up when page is closed
+    window.addEventListener('beforeunload', disconnect);
   </script>
 </body>
 

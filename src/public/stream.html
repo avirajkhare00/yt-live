@@ -1,14 +1,344 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <title>YT-Live | Stream</title>
-  </head>
-  <body>
-    <div id="psycho">
-      <span id="psycho-text"></span>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YT-Live | Stream</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f0f0f0;
+    }
+
+    .container {
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      color: #333;
+      text-align: center;
+    }
+
+    #localVideo {
+      width: 100%;
+      max-width: 640px;
+      height: auto;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    }
+
+    .controls {
+      margin: 20px 0;
+      text-align: center;
+    }
+
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      margin: 0 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    button:hover {
+      background: #0056b3;
+    }
+
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .status {
+      text-align: center;
+      margin: 20px 0;
+      padding: 10px;
+      border-radius: 5px;
+      font-weight: bold;
+    }
+
+    .status.connected {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .status.connecting {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>YT-Live Streamer</h1>
+
+    <div class="status" id="status">Click "Start Streaming" to begin</div>
+
+    <div style="text-align: center; margin: 20px 0;">
+      <video id="localVideo" autoplay muted playsinline></video>
     </div>
-    <script type="text/javascript">
-      document.getElementById('psycho-text').innerText = "No libraries, lets go full mode psycho!!!";
-    </script>
-  </body>
+
+    <div class="controls">
+      <button id="startBtn" onclick="startStreaming()">Start Streaming</button>
+      <button id="stopBtn" onclick="stopStreaming()" disabled>Stop Streaming</button>
+    </div>
+
+    <div style="text-align: center; margin-top: 20px; color: #666;">
+      <p>Share this link with others to watch: <a href="/watch" target="_blank">/watch</a></p>
+    </div>
+  </div>
+
+  <script>
+            let localStream = null;
+        let ws = null;
+        let peerConnections = new Map(); // peerId -> RTCPeerConnection
+        let clientId = null;
+
+    const localVideo = document.getElementById('localVideo');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const status = document.getElementById('status');
+
+    // WebRTC configuration
+    const pcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    };
+
+    function updateStatus(message, type = 'connecting') {
+      status.textContent = message;
+      status.className = `status ${type}`;
+    }
+
+    async function startStreaming() {
+      try {
+        updateStatus('Getting camera and microphone access...', 'connecting');
+
+        // Get user media
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true
+        });
+
+        localVideo.srcObject = localStream;
+
+        // Connect to WebSocket
+        connectWebSocket();
+
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+
+      } catch (error) {
+        console.error('Error starting stream:', error);
+        updateStatus('Error: Could not access camera/microphone', 'error');
+      }
+    }
+
+    function connectWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        updateStatus('Connected to server. Waiting for another streamer...', 'connected');
+
+        // Join as streamer
+        ws.send(JSON.stringify({
+          type: 'join',
+          clientType: 'streamer'
+        }));
+      };
+
+      ws.onmessage = async (event) => {
+        const data = JSON.parse(event.data);
+        console.log('Received:', data.type);
+
+        switch (data.type) {
+          case 'joined':
+            clientId = data.clientId;
+            console.log('Joined with ID:', clientId);
+            break;
+
+                              case 'create-offer':
+                        await createOffer(data.targetId);
+                        break;
+
+                    case 'offer':
+                        await handleOffer(data.senderId, data.offer);
+                        break;
+
+                    case 'answer':
+                        await handleAnswer(data.senderId, data.answer);
+                        break;
+
+                    case 'ice-candidate':
+                        await handleIceCandidate(data.senderId, data.candidate);
+                        break;
+
+          case 'streamer-joined':
+            if (data.streamersCount === 2) {
+              updateStatus('Connected with another streamer!', 'connected');
+            }
+            break;
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        updateStatus('Disconnected from server', 'error');
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        updateStatus('Connection error', 'error');
+      };
+    }
+
+            function createPeerConnection(peerId) {
+            const pc = new RTCPeerConnection(pcConfig);
+
+            // Add local stream to peer connection
+            localStream.getTracks().forEach(track => {
+                pc.addTrack(track, localStream);
+            });
+
+            // Handle ICE candidates
+            pc.onicecandidate = (event) => {
+                if (event.candidate && ws) {
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        candidate: event.candidate,
+                        targetId: peerId
+                    }));
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                console.log(`Connection state with ${peerId}:`, pc.connectionState);
+                if (pc.connectionState === 'connected') {
+                    updateStatus('Connected with peers!', 'connected');
+                } else if (pc.connectionState === 'disconnected') {
+                    updateStatus('Peer disconnected', 'error');
+                }
+            };
+
+            peerConnections.set(peerId, pc);
+            return pc;
+        }
+
+            async function createOffer(targetId) {
+            let pc = peerConnections.get(targetId);
+            if (!pc) {
+                pc = createPeerConnection(targetId);
+            }
+
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                ws.send(JSON.stringify({
+                    type: 'offer',
+                    offer: offer,
+                    targetId: targetId
+                }));
+
+                updateStatus('Creating connection...', 'connecting');
+            } catch (error) {
+                console.error('Error creating offer:', error);
+            }
+        }
+
+        async function handleOffer(senderId, offer) {
+            let pc = peerConnections.get(senderId);
+            if (!pc) {
+                pc = createPeerConnection(senderId);
+            }
+
+            try {
+                await pc.setRemoteDescription(offer);
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+
+                ws.send(JSON.stringify({
+                    type: 'answer',
+                    answer: answer,
+                    targetId: senderId
+                }));
+
+                updateStatus('Responding to connection...', 'connecting');
+            } catch (error) {
+                console.error('Error handling offer:', error);
+            }
+        }
+
+        async function handleAnswer(senderId, answer) {
+            const pc = peerConnections.get(senderId);
+            if (!pc) return;
+
+            try {
+                await pc.setRemoteDescription(answer);
+                updateStatus('Connection established!', 'connected');
+            } catch (error) {
+                console.error('Error handling answer:', error);
+            }
+        }
+
+        async function handleIceCandidate(senderId, candidate) {
+            const pc = peerConnections.get(senderId);
+            if (!pc) return;
+
+            try {
+                await pc.addIceCandidate(candidate);
+            } catch (error) {
+                console.error('Error handling ICE candidate:', error);
+            }
+        }
+
+            function stopStreaming() {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+
+            // Close all peer connections
+            peerConnections.forEach((pc) => {
+                pc.close();
+            });
+            peerConnections.clear();
+
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+
+            localVideo.srcObject = null;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            updateStatus('Streaming stopped', 'error');
+        }
+
+    // Clean up when page is closed
+    window.addEventListener('beforeunload', stopStreaming);
+  </script>
+</body>
+
 </html>
