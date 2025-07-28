@@ -25,6 +25,10 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(morgan('dev'));
 
+app.get('/', async (_: Request, res: Response) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.get('/stream', async (_: Request, res: Response) => {
   res.sendFile(path.join(__dirname, 'public', 'stream.html'));
 })
